@@ -1,0 +1,5 @@
+venv
+templates
+apestoken/build
+apestoken/generated
+apestoken/node_modules

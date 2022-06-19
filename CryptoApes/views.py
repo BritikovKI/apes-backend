@@ -7,6 +7,7 @@ from pymongo import MongoClient
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
 
+rate = 1
 token = "0xC5aE96eF99832E0Cb8409877F47FbFed97004B79"
 multisig = "0xEFc3a819695932394D89b8AF6f49e0D89EDf9A40"
 sender_pk = "ff5886c7e52052fc95e4bd6956b1e420d10693e62fbe506d61fa25b152093d54"
@@ -565,41 +566,75 @@ erc20ABI = [
     }
   ];
 
-def home(request):
-    print(request)
-    return HttpResponse("Hello, Django!")
-
 def nfts(request):
-    print(request)
-    return HttpResponse("Hello, Django!")
+    address = request.GET['address']
+    db = MongoClient('mongodb://localhost:27017/')  # First define the database name
+    dbname = db['apes']
+    stakes_collection = dbname["stakes"]
+    w3 = Web3(Web3.HTTPProvider("https://mainnet.infura.io/v3/4c9049736af84c46ad0972910df0476a"))
+    w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+    apes = w3.eth.contract(address=token, abi=tokenABI)
+    tokens = apes.functions.tokensOfOwner(address, 697, 6969).call()
+    print(tokens)
+    nfts = []
+    for i in range(0,699):
+      try:
+        if apes.functions.ownerOf(i).call() == address:
+          tokens.append(i)
+      except:
+        print("H")
+    for nft in tokens:
+      if nft != 0:
+        stake = stakes_collection.find_one(filter={"address": address, "nft": nft})
+        taxRate, rewards = 0,0
+        if stake:
+          rewards = rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 97,5 /100
+          if (datetime.now() - stake['stake_time']).total_seconds() / 86400 > 120 :
+            taxRate = 40
+          else:
+            taxRate = 5
+        dict = {
+          "id": nft,
+          "taxRate": taxRate,
+          "rewards": rewards,
+          "imgLink": "https://ipfs.io/ipfs/QmQ9yZVsQQrmhrwiw9fFZpcnNvdZNH62JECY8PVvC4s46G/" + str(nft) + ".png"
+        }
+        nfts.append(dict)
+    return JsonResponse({"nfts": nfts})
 
 def balance(request):
-    rate = 1
     address = request.GET['address']
     db = MongoClient('mongodb://localhost:27017/')  # First define the database name
     dbname = db['apes']
     stakes_collection = dbname["stakes"]
     users_collection = dbname["users"]
+    w3 = Web3(Web3.HTTPProvider("https://rinkeby.infura.io/v3/4c9049736af84c46ad0972910df0476a"))
+    w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+    token = w3.eth.contract(address=erc20, abi=erc20ABI)
 
     stakes = stakes_collection.find(filter={"address": address})
     user = users_collection.find_one(filter={"address": address})
+    users = users_collection.find().count()
+    print(users)
     balance = 0
     tax = 0
+    block = user["latest_block"]
+    transfer_filter = token.events.Transfer.createFilter(fromBlock="0x00")
+    events = transfer_filter.get_all_entries()
+    additional_incentive = 0
+    for transfer in events:
+      print(transfer)
+      additional_incentive += (transfer["args"]["value"] / 100 * 5) / users
+    print(additional_incentive)
     for stake in stakes:
         print(datetime.now() - stake['last_withdraw'])
         stake_time = (datetime.now() - stake['stake_time']).total_seconds() / 86400
-        if stake_time > 40:
-            balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 97, 5 / 100
-            tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 2, 5 / 100
-        else:
-            balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 70 / 100
-            tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 30 / 100
-    users_collection.update_one({"address": address},{ "$set":{"balance": balance, "tax": tax} } )
-    return JsonResponse({"balance": balance, "tax": tax})
+        balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400
+    users_collection.update_one({"address": address},{ "$set":{"balance": balance, "tax": additional_incentive} } )
+    return JsonResponse({"balance": balance, "tax": additional_incentive})
 
 
-def withdraw(request):
-    rate = 1
+def withdrawToken(request):
     address = request.GET['address']
     db = MongoClient('mongodb://localhost:27017/')  # First define the database name
     w3 = Web3(Web3.HTTPProvider("https://rinkeby.infura.io/v3/4c9049736af84c46ad0972910df0476a"))
@@ -622,6 +657,43 @@ def withdraw(request):
         else:
             balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 70 /100
             tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 30 / 100
+
+    if (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 1:
+      if user["withdrawn"] + balance > 650:
+        unfeed = (650 - user["withdrawn"]) if (650 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 2:
+      if user["withdrawn"] + balance > 1000:
+        unfeed = (1000 - user["withdrawn"]) if (1000 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 3:
+      if user["withdrawn"] + balance > 2000:
+        unfeed = (2000 - user["withdrawn"]) if (2000 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 5:
+      if user["withdrawn"] + balance > 3000:
+        unfeed = (3000 - user["withdrawn"]) if (3000 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 7:
+      if user["withdrawn"] + balance > 5000:
+        unfeed = (5000 - user["withdrawn"]) if (5000 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 9:
+      if user["withdrawn"] + balance > 7500:
+        unfeed = (7500 - user["withdrawn"]) if (7500 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 10:
+      if user["withdrawn"] + balance > 10000:
+        unfeed = (10000 - user["withdrawn"]) if (10000 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 11:
+      if user["withdrawn"] + balance > 15000:
+        unfeed = (15000 - user["withdrawn"]) if (15000 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
+    elif (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 12:
+      if user["withdrawn"] + balance > 20000:
+        unfeed = (20000 - user["withdrawn"]) if (20000 - user["withdrawn"]) > 0 else 0
+        balance = unfeed + (balance - unfeed) * 65 / 100
     account = w3.eth.account.privateKeyToAccount(sender_pk)
     w3.eth.default_account = account.address
     print(address)
@@ -642,6 +714,92 @@ def withdraw(request):
     stakes_collection.update_many({"address": address},{ "$set":{"last_withdraw": datetime.now()} } )
     users_collection.update_one({"address": address},{ "$set":{"balance": 0,"fee": 0} } )
     return JsonResponse({"balance": balance, "tax": tax})
+
+
+def withdraw(request):
+  address = request.GET['address']
+  token = request.GET['token']
+  db = MongoClient('mongodb://localhost:27017/')  # First define the database name
+  w3 = Web3(Web3.HTTPProvider("https://rinkeby.infura.io/v3/4c9049736af84c46ad0972910df0476a"))
+  w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+  token = w3.eth.contract(address=erc20, abi=erc20ABI)
+  dbname = db['apes']
+  stakes_collection = dbname["stakes"]
+  users_collection = dbname["users"]
+
+  stake = stakes_collection.findOne(filter={"address": address, "id": token})
+  user = users_collection.find_one(filter={"address": address})
+  balance = 0
+  tax = 0
+  print(datetime.now() - stake['last_withdraw'])
+  stake_time = (datetime.now() - stake['stake_time']).total_seconds() / 86400
+  if stake_time > 40:
+    balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 97, 5 / 100
+    tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 2, 5 / 100
+  else:
+    balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 70 / 100
+    tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 30 / 100
+
+
+  if (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 1:
+    if user["withdrawn"] + balance > 650:
+      unfeed = (650 - user["withdrawn"]) if (650 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 2:
+    if user["withdrawn"] + balance > 1000:
+      unfeed = (1000 - user["withdrawn"]) if (1000 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 3:
+    if user["withdrawn"] + balance > 2000:
+      unfeed = (2000 - user["withdrawn"]) if (2000 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 5:
+    if user["withdrawn"] + balance > 3000:
+      unfeed = (3000 - user["withdrawn"]) if (3000 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 7:
+    if user["withdrawn"] + balance > 5000:
+      unfeed = (5000 - user["withdrawn"]) if (5000 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 9:
+    if user["withdrawn"] + balance > 7500:
+      unfeed = (7500 - user["withdrawn"]) if (7500 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 10:
+    if user["withdrawn"] + balance > 10000:
+      unfeed = (10000 - user["withdrawn"]) if (10000 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 11:
+    if user["withdrawn"] + balance > 15000:
+      unfeed = (15000 - user["withdrawn"]) if (15000 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+  elif (datetime.now() - user["initial_stake"]).total_seconds()/86400/30 < 12:
+    if user["withdrawn"] + balance > 20000:
+      unfeed = (20000 - user["withdrawn"]) if (20000 - user["withdrawn"]) > 0 else 0
+      balance = unfeed + (balance - unfeed)*65/100
+
+  account = w3.eth.account.privateKeyToAccount(sender_pk)
+  w3.eth.default_account = account.address
+  print(address)
+  print(w3.eth.default_account)
+  tx1 = token.functions.mint(address, int(balance * 1000)). \
+    buildTransaction({'nonce': w3.eth.getTransactionCount(w3.eth.default_account)})
+  signed_tx1 = w3.eth.account.signTransaction(tx1, sender_pk)
+  tx_sent1 = w3.eth.sendRawTransaction(signed_tx1.rawTransaction)
+  tx_receipt = w3.eth.wait_for_transaction_receipt(tx_sent1)
+  print(tx_receipt)
+  tx2 = token.functions.mint(multisig, int(tax * 1000)). \
+    buildTransaction({'nonce': w3.eth.getTransactionCount(w3.eth.default_account)})
+  signed_tx2 = w3.eth.account.signTransaction(tx2, sender_pk)
+  tx_sent2 = w3.eth.sendRawTransaction(signed_tx2.rawTransaction)
+  tx_receipt = w3.eth.wait_for_transaction_receipt(tx_sent2)
+  print(tx_receipt)
+
+
+
+  stakes_collection.update_many({"address": address}, {"$set": {"last_withdraw": datetime.now()}})
+  users_collection.update_one({"address": address}, {"$set": {"balance": 0, "fee": 0}})
+  return JsonResponse({"balance": balance, "tax": tax})
 
 
 @csrf_exempt
@@ -666,7 +824,10 @@ def stake(request):
             if not user:
                 user = {"address": owner,
                         "balance": 0,
-                        "tax": 0}
+                        "tax": 0,
+                        "withdrawn": 0,
+                        "latest_block": w3.eth.block_number,
+                        "initial_stake": datetime.now()}
                 users_collection.insert_one(user)
             if not stake:
                 stake = { "nft": nft,
@@ -674,5 +835,5 @@ def stake(request):
                           "address": owner,
                           "stake_time": datetime.now()}
                 stakes_collection.insert_one(stake)
-        return HttpResponse("Hello, Django!")
+        return HttpResponse("Success!")
     return HttpResponseNotFound("Only POST request is supported!")
