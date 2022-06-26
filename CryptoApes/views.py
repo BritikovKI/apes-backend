@@ -577,12 +577,6 @@ def nfts(request):
     tokens = apes.functions.tokensOfOwner(address, 697, 6969).call()
     print(tokens)
     nfts = []
-    for i in range(0,699):
-      try:
-        if apes.functions.ownerOf(i).call() == address:
-          tokens.append(i)
-      except:
-        print("H")
     for nft in tokens:
       if nft != 0:
         stake = stakes_collection.find_one(filter={"address": address, "nft": nft})
@@ -593,9 +587,15 @@ def nfts(request):
             taxRate = 40
           else:
             taxRate = 5
+        rarity = 1
+        if nft > 3000:
+          rarity = 3
+        elif nft > 1000:
+          rarity = 2
         dict = {
           "id": nft,
           "taxRate": taxRate,
+          "tier": rarity,
           "rewards": rewards,
           "imgLink": "https://ipfs.io/ipfs/QmQ9yZVsQQrmhrwiw9fFZpcnNvdZNH62JECY8PVvC4s46G/" + str(nft) + ".png"
         }
@@ -614,11 +614,10 @@ def balance(request):
 
     stakes = stakes_collection.find(filter={"address": address})
     user = users_collection.find_one(filter={"address": address})
-    users = users_collection.find().count()
+    users = users_collection.count_documents(filter={})
+    num_stakes = stakes_collection.count_documents(filter={"address": address})
     print(users)
     balance = 0
-    tax = 0
-    block = user["latest_block"]
     transfer_filter = token.events.Transfer.createFilter(fromBlock="0x00")
     events = transfer_filter.get_all_entries()
     additional_incentive = 0
@@ -626,16 +625,23 @@ def balance(request):
       print(transfer)
       additional_incentive += (transfer["args"]["value"] / 100 * 5) / users
     print(additional_incentive)
+    if num_stakes == 0:
+      resp = JsonResponse({"balance": 0, "tax": 0})
+      return resp
     for stake in stakes:
         print(datetime.now() - stake['last_withdraw'])
         stake_time = (datetime.now() - stake['stake_time']).total_seconds() / 86400
         balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400
     users_collection.update_one({"address": address},{ "$set":{"balance": balance, "tax": additional_incentive} } )
-    return JsonResponse({"balance": balance, "tax": additional_incentive})
+    print(balance, additional_incentive)
+    resp = JsonResponse({"balance": balance, "tax": additional_incentive})
+    # resp["Access-"]
+    return resp
 
 
 def withdrawToken(request):
     address = request.GET['address']
+    id = request.GET['token']
     db = MongoClient('mongodb://localhost:27017/')  # First define the database name
     w3 = Web3(Web3.HTTPProvider("https://rinkeby.infura.io/v3/4c9049736af84c46ad0972910df0476a"))
     w3.middleware_onion.inject(geth_poa_middleware, layer=0)
@@ -644,19 +650,18 @@ def withdrawToken(request):
     stakes_collection = dbname["stakes"]
     users_collection = dbname["users"]
 
-    stakes = stakes_collection.find(filter={"address": address})
+    stake = stakes_collection.find_one(filter={"nft":id, "address": address})
     user = users_collection.find_one(filter={"address": address})
     balance = 0
     tax = 0
-    for stake in stakes:
-        print(datetime.now() - stake['last_withdraw'])
-        stake_time =  (datetime.now() - stake['stake_time']).total_seconds() / 86400
-        if stake_time > 40:
-            balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 97,5 /100
-            tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 2,5 / 100
-        else:
-            balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 70 /100
-            tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 30 / 100
+    print(datetime.now() - stake['last_withdraw'])
+    stake_time =  (datetime.now() - stake['stake_time']).total_seconds() / 86400
+    if stake_time > 40:
+        balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 97,5 /100
+        tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 2,5 / 100
+    else:
+        balance += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 70 /100
+        tax += rate * (datetime.now() - stake['last_withdraw']).total_seconds() / 86400 * 30 / 100
 
     if (datetime.now() - user["initial_stake"]).total_seconds() / 86400 / 30 < 1:
       if user["withdrawn"] + balance > 650:
@@ -718,7 +723,6 @@ def withdrawToken(request):
 
 def withdraw(request):
   address = request.GET['address']
-  token = request.GET['token']
   db = MongoClient('mongodb://localhost:27017/')  # First define the database name
   w3 = Web3(Web3.HTTPProvider("https://rinkeby.infura.io/v3/4c9049736af84c46ad0972910df0476a"))
   w3.middleware_onion.inject(geth_poa_middleware, layer=0)
